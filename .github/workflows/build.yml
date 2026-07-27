@@ -1,0 +1,77 @@
+name: figlet on irix
+
+# Builds figlet 2.2.5 from upstream source on an SGI workstation.
+#
+# irix-actions-runner has no expression evaluator, so ${{ }} is unusable in a
+# run: body or a with: value. The $GITHUB_* shell variables work normally.
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: [self-hosted, irix]
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Environment
+        run: |
+          set -eu
+          uname -a
+          hinv -c processor | head -3
+          gcc --version | sed -n 1p
+
+      - name: Fetch figlet 2.2.5
+        run: |
+          set -eu
+          rm -rf figlet-2.2.5 figlet.tar.gz
+          curl -fsSLo figlet.tar.gz \
+            https://codeload.github.com/cmatsuoka/figlet/tar.gz/refs/tags/2.2.5
+          gzip -dc figlet.tar.gz | tar xf -
+          ls figlet-2.2.5 | head
+
+      # Expected to fail. XCFLAGS defaults to -DTLF_FONTS, which pulls in
+      # utf8.h, which opens with __BEGIN_DECLS, a glibc macro IRIX lacks.
+      - name: Build unpatched
+        run: |
+          set -eu
+          cd figlet-2.2.5
+          if make CC=gcc LD=gcc > build.log 2>&1; then
+            echo "unexpected: built without the shim"
+            exit 1
+          fi
+          grep "error:" build.log | head -3
+          make clean > /dev/null 2>&1
+
+      - name: Build with the IRIX shim
+        run: |
+          set -eu
+          cd figlet-2.2.5
+          # XCFLAGS is left at its default so TLF font support stays on.
+          make CC=gcc LD=gcc \
+               CFLAGS="-g -O2 -Wall -include $GITHUB_WORKSPACE/patches/irix-cdefs.h"
+          file figlet
+
+      - name: Run figlet
+        run: |
+          set -eu
+          cd figlet-2.2.5
+          ./figlet -d fonts -f standard -w 72 "IRIX 6.5"
+          ./figlet -d fonts -f small -w 72 "$GITHUB_REF_NAME @ $(echo $GITHUB_SHA | cut -c1-7)"
+
+      - name: Package
+        run: |
+          set -eu
+          rm -rf out && mkdir out
+          cp figlet-2.2.5/figlet out/
+          cp -r figlet-2.2.5/fonts out/
+          strip out/figlet
+          ls -l out/figlet
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: figlet-irix-mips-n32
+          path: out
