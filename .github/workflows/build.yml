@@ -2,8 +2,9 @@ name: figlet on irix
 
 # Builds figlet 2.2.5 from upstream source on an SGI workstation.
 #
-# irix-actions-runner has no expression evaluator, so ${{ }} is unusable in a
-# run: body or a with: value. The $GITHUB_* shell variables work normally.
+# Needs irix-actions-runner 0.3.0 or newer for the ${{ }} below. An env: block
+# is readable as ${{ env.NAME }} but is not exported to the step's shell, so
+# $FIGLET_VERSION is empty.
 
 on:
   push:
@@ -13,6 +14,9 @@ jobs:
   build:
     runs-on: [self-hosted, irix]
     timeout-minutes: 30
+    env:
+      FIGLET_VERSION: 2.2.5
+      FIGLET_FONT: small
 
     steps:
       - uses: actions/checkout@v4
@@ -24,21 +28,21 @@ jobs:
           hinv -c processor | head -3
           gcc --version | sed -n 1p
 
-      - name: Fetch figlet 2.2.5
+      - name: Fetch figlet ${{ env.FIGLET_VERSION }}
         run: |
           set -eu
-          rm -rf figlet-2.2.5 figlet.tar.gz
+          rm -rf figlet-${{ env.FIGLET_VERSION }} figlet.tar.gz
           curl -fsSLo figlet.tar.gz \
-            https://codeload.github.com/cmatsuoka/figlet/tar.gz/refs/tags/2.2.5
+            https://codeload.github.com/cmatsuoka/figlet/tar.gz/refs/tags/${{ env.FIGLET_VERSION }}
           gzip -dc figlet.tar.gz | tar xf -
-          ls figlet-2.2.5 | head
+          ls figlet-${{ env.FIGLET_VERSION }} | head
 
       # Expected to fail. XCFLAGS defaults to -DTLF_FONTS, which pulls in
       # utf8.h, which opens with __BEGIN_DECLS, a glibc macro IRIX lacks.
       - name: Build unpatched
         run: |
           set -eu
-          cd figlet-2.2.5
+          cd figlet-${{ env.FIGLET_VERSION }}
           if make CC=gcc LD=gcc > build.log 2>&1; then
             echo "unexpected: built without the shim"
             exit 1
@@ -49,7 +53,7 @@ jobs:
       - name: Build with the IRIX shim
         run: |
           set -eu
-          cd figlet-2.2.5
+          cd figlet-${{ env.FIGLET_VERSION }}
           # XCFLAGS is left at its default so TLF font support stays on.
           make CC=gcc LD=gcc \
                CFLAGS="-g -O2 -Wall -include $GITHUB_WORKSPACE/patches/irix-cdefs.h"
@@ -58,20 +62,28 @@ jobs:
       - name: Run figlet
         run: |
           set -eu
-          cd figlet-2.2.5
+          cd figlet-${{ env.FIGLET_VERSION }}
           ./figlet -d fonts -f standard -w 72 "IRIX 6.5"
-          ./figlet -d fonts -f small -w 72 "$GITHUB_REF_NAME @ $(echo $GITHUB_SHA | cut -c1-7)"
+          ./figlet -d fonts -f ${{ env.FIGLET_FONT }} -w 72 \
+            "${{ format('{0} #{1}', github.ref_name, github.run_number) }}"
 
       - name: Package
         run: |
           set -eu
           rm -rf out && mkdir out
-          cp figlet-2.2.5/figlet out/
-          cp -r figlet-2.2.5/fonts out/
+          cp figlet-${{ env.FIGLET_VERSION }}/figlet out/
+          cp -r figlet-${{ env.FIGLET_VERSION }}/fonts out/
           strip out/figlet
           ls -l out/figlet
 
+      - name: Announce a tag build
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -eu
+          cd figlet-${{ env.FIGLET_VERSION }}
+          ./figlet -d fonts -f standard -w 72 "RELEASE"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: figlet-irix-mips-n32
+          name: figlet-irix-mips-n32-${{ github.run_number }}
           path: out

@@ -37,7 +37,8 @@ changes.
 
 ## Building it
 
-Requires a runner registered with the `irix` label; see
+Requires irix-actions-runner 0.3.0 or newer, registered with the `irix` label;
+see
 [irix-actions-runner](https://github.com/sgidevnet/irix-actions-runner#configure-and-run)
 for setup.
 
@@ -50,15 +51,32 @@ them in full.
 
 | Constraint | Write this instead |
 |---|---|
-| No expression evaluator | Use `$GITHUB_REF_NAME` and the rest of the `$GITHUB_*` set in `run:` bodies. `${{ }}` is rejected there, and reads as absent in a `with:` value |
-| `with:` values must be literal | Hardcode artifact names. A name built from run metadata silently becomes `artifact` |
+| An `env:` block is not exported to the step's shell | Read it as `${{ env.NAME }}`, as this workflow does for `FIGLET_VERSION`. `$FIGLET_VERSION` is empty |
+| No `hashFiles()`, and no `steps` context | Both fail the step by name. Without `$GITHUB_OUTPUT` there is nothing to put in `steps` |
 | No `GITHUB_TOKEN` in the step environment | Put REST API work in a separate job on a hosted runner |
 | Steps run under `-e`, bash steps under `-o pipefail` | Wrap a command you expect to fail in `if ...; then`, as the unpatched build is |
 | Workspace is not wiped between jobs | Run `git clean -xdff` after checkout when a clean tree matters |
 
-The first is the one that catches people:
+## Expressions
+
+`${{ }}` is evaluated in a `run:` body, a `with:` value, an `if:` and a step
+`name:`. Every context the job message carries is available, plus `env`,
+`secrets` and a synthesised `runner`.
 
 ```yaml
-- run: echo "building ${{ github.ref_name }}"   # rejected
-- run: echo "building $GITHUB_REF_NAME"         # works
+- name: Fetch figlet ${{ env.FIGLET_VERSION }}
+  run: |
+    curl -fsSLo figlet.tar.gz \
+      https://codeload.github.com/cmatsuoka/figlet/tar.gz/refs/tags/${{ env.FIGLET_VERSION }}
+
+- name: Announce a tag build
+  if: startsWith(github.ref, 'refs/tags/')
+  run: ./figlet -w 72 RELEASE
+
+- uses: actions/upload-artifact@v4
+  with:
+    name: figlet-irix-mips-n32-${{ github.run_number }}
 ```
+
+That last one used to upload as `artifact`, because an expression in a `with:`
+value read as absent.
