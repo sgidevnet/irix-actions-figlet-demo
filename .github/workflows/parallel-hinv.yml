@@ -42,46 +42,29 @@ jobs:
           name: probe-${{ matrix.n }}
           path: out
 
+  # The fan-in needs nothing from IRIX, and a hosted runner gets the real
+  # download-artifact, which takes `pattern:` where the IRIX handler takes one
+  # literal name and creates one directory level.
   collect:
     needs: probe
-    runs-on: [self-hosted, irix]
-    timeout-minutes: 15
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Clear the workspace
-        run: rm -rf s0 s1 s2 s3 s4 s5 s6 s7 s8 s9
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: probe-*
+          path: all
 
-      # One step per artifact and a flat destination. download-artifact takes a
-      # single name, implements no wildcard, and creates exactly one directory
-      # level, so a nested `all/0` fails with `cannot create`.
-      - uses: actions/download-artifact@v4
-        with: { name: probe-0, path: s0 }
-      - uses: actions/download-artifact@v4
-        with: { name: probe-1, path: s1 }
-      - uses: actions/download-artifact@v4
-        with: { name: probe-2, path: s2 }
-      - uses: actions/download-artifact@v4
-        with: { name: probe-3, path: s3 }
-      - uses: actions/download-artifact@v4
-        with: { name: probe-4, path: s4 }
-      - uses: actions/download-artifact@v4
-        with: { name: probe-5, path: s5 }
-      - uses: actions/download-artifact@v4
-        with: { name: probe-6, path: s6 }
-      - uses: actions/download-artifact@v4
-        with: { name: probe-7, path: s7 }
-      - uses: actions/download-artifact@v4
-        with: { name: probe-8, path: s8 }
-      - uses: actions/download-artifact@v4
-        with: { name: probe-9, path: s9 }
-
+      # out/ and not the artifact root: the IRIX handler zips the path it was
+      # given, while the reference upload-artifact strips that leading
+      # component.
       - name: Every machine that ran
         run: |
           set -eu
-          for d in s0 s1 s2 s3 s4 s5 s6 s7 s8 s9; do
-            printf '%-10s %-8s %s\n' "$(cat $d/runner)" "$(cat $d/host)" \
-              "$(sed -n 's/^CPU: //p' $d/hinv)"
+          for d in all/probe-*/out; do
+            printf '%-10s %-8s %s\n' "$(cat "$d/runner")" "$(cat "$d/host")" \
+              "$(sed -n 's/^CPU: //p' "$d/hinv")"
           done
           echo
-          echo "runner identities: $(cat s*/runner | sort -u | wc -l) distinct"
-          echo "urandom samples:   $(cat s*/urandom | sort -u | wc -l) distinct"
+          echo "runner identities: $(cat all/probe-*/out/runner | sort -u | wc -l) distinct"
+          echo "urandom samples:   $(cat all/probe-*/out/urandom | sort -u | wc -l) distinct"
