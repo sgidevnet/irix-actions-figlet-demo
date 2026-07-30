@@ -1,10 +1,9 @@
 name: parallel hinv
 
-# Ten jobs at once, each landing on a different runner, each reporting the
-# machine it woke up on. Under `runner serve` every job restores its own
-# emulated Indy, so this is ten machines rather than ten shells.
-#
-# A pool with fewer than ten identities still works, the matrix just queues.
+# Ten jobs dispatched at once, each landing on a different runner identity and
+# each restoring its own emulated Indy. The last job collects what all ten
+# reported. A pool with fewer than ten identities still works, the matrix just
+# queues.
 
 on:
   workflow_dispatch:
@@ -20,26 +19,27 @@ jobs:
 
     steps:
       # The workspace is never wiped between jobs, so out/ may be last run's.
-      - name: Tag this machine
+      - name: Identify this machine
         run: |
           set -eu
           rm -rf out && mkdir out
-          # IRIX 6.5 has no uuidgen. 16 bytes of /dev/urandom, punctuated.
-          od -An -tx1 -N16 /dev/urandom | tr -d ' \n' | sed \
-            's/\(........\)\(....\)\(....\)\(....\)\(............\)/\1-\2-\3-\4-\5/' \
-            > out/uuid
+          echo "${{ runner.name }}" > out/runner
           hostname > out/host
-          echo "slot ${{ matrix.n }} is $(cat out/host) $(cat out/uuid)"
+          # Every guest resumes the same golden snapshot, entropy pool
+          # included, so this is the same 16 bytes on all ten. It identifies
+          # the snapshot, not the machine.
+          od -An -tx1 -N16 /dev/urandom | tr -d ' \n' > out/urandom
+          echo "slot ${{ matrix.n }} on $(cat out/runner), guest $(cat out/host)"
 
       - name: hinv
         run: |
           set -eu
           hinv > out/hinv
-          sed -n 1,4p out/hinv
+          cat out/hinv
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hinv-${{ matrix.n }}
+          name: probe-${{ matrix.n }}
           path: out
 
   collect:
@@ -49,37 +49,39 @@ jobs:
 
     steps:
       - name: Clear the workspace
-        run: rm -rf all
+        run: rm -rf s0 s1 s2 s3 s4 s5 s6 s7 s8 s9
 
-      # One step per artifact: download-artifact takes a single name and the
-      # runner implements no wildcard.
+      # One step per artifact and a flat destination. download-artifact takes a
+      # single name, implements no wildcard, and creates exactly one directory
+      # level, so a nested `all/0` fails with `cannot create`.
       - uses: actions/download-artifact@v4
-        with: { name: hinv-0, path: all/0 }
+        with: { name: probe-0, path: s0 }
       - uses: actions/download-artifact@v4
-        with: { name: hinv-1, path: all/1 }
+        with: { name: probe-1, path: s1 }
       - uses: actions/download-artifact@v4
-        with: { name: hinv-2, path: all/2 }
+        with: { name: probe-2, path: s2 }
       - uses: actions/download-artifact@v4
-        with: { name: hinv-3, path: all/3 }
+        with: { name: probe-3, path: s3 }
       - uses: actions/download-artifact@v4
-        with: { name: hinv-4, path: all/4 }
+        with: { name: probe-4, path: s4 }
       - uses: actions/download-artifact@v4
-        with: { name: hinv-5, path: all/5 }
+        with: { name: probe-5, path: s5 }
       - uses: actions/download-artifact@v4
-        with: { name: hinv-6, path: all/6 }
+        with: { name: probe-6, path: s6 }
       - uses: actions/download-artifact@v4
-        with: { name: hinv-7, path: all/7 }
+        with: { name: probe-7, path: s7 }
       - uses: actions/download-artifact@v4
-        with: { name: hinv-8, path: all/8 }
+        with: { name: probe-8, path: s8 }
       - uses: actions/download-artifact@v4
-        with: { name: hinv-9, path: all/9 }
+        with: { name: probe-9, path: s9 }
 
       - name: Every machine that ran
         run: |
           set -eu
-          for d in all/*; do
-            echo "--- slot ${d#all/}  $(cat $d/host)  $(cat $d/uuid)"
-            sed -n 1,3p "$d/hinv"
+          for d in s0 s1 s2 s3 s4 s5 s6 s7 s8 s9; do
+            printf '%-10s %-8s %s\n' "$(cat $d/runner)" "$(cat $d/host)" \
+              "$(sed -n 's/^CPU: //p' $d/hinv)"
           done
-          echo "distinct machines:"
-          cat all/*/uuid | sort -u | wc -l
+          echo
+          echo "runner identities: $(cat s*/runner | sort -u | wc -l) distinct"
+          echo "urandom samples:   $(cat s*/urandom | sort -u | wc -l) distinct"
