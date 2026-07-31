@@ -15,11 +15,21 @@ seconds on a 400MHz R12000.
 
 The Makefile sets `XCFLAGS` to `-DTLF_FONTS`, which pulls in `utf8.h`, which
 opens with `__BEGIN_DECLS`. That macro belongs to glibc's `<sys/cdefs.h>` and
-IRIX has no equivalent, so no declaration in the header parses. The first error
-reported is in another file, several hundred lines from the cause.
+IRIX has no equivalent, so no declaration in the header parses. `zipio.h` opens
+the same way.
+
+How legible that is depends on the compiler. GCC 9.2 names the macro, and the
+first thing it reports is a symptom several hundred lines away:
 
     utf8.h:30:1: error: unknown type name '__BEGIN_DECLS'
     figlet.c:1149:5: warning: implicit declaration of function 'utf8_to_wchar'
+
+GCC 3.4.6, which is what the emulated worker image has, never mentions it. It
+points at the declaration that followed instead, with no column and no note of
+what came before:
+
+    utf8.h:32: error: syntax error before "size_t"
+    zipio.h:76: error: syntax error before "typedef"
 
 Three ways it goes:
 
@@ -37,12 +47,30 @@ changes.
 
 ## Building it
 
-Requires irix-actions-runner 0.3.0 or newer, registered with the `irix` label;
+Requires irix-actions-runner 0.4.0 or newer, registered with the `irix` label;
 see
-[irix-actions-runner](https://github.com/sgidevnet/irix-actions-runner#configure-and-run)
-for setup.
+[irix-actions-runner](https://github.com/sgidevnet/irix-actions-runner#getting-started)
+for setup. A real SGI and an emulated pool under `runner serve` both work.
 
     gh workflow run build.yml
+
+## What the guest ships
+
+A full SGUG-RSE install puts GCC 9.2 at `/usr/sgug/bin/gcc`, which is on the
+step PATH. The published emulated worker image carries an SGUG-RSE subset
+(`git`, `bash`, `zip`, `unzip`) alongside Nekoware, so `gcc` there is 3.4.6 at
+`/usr/nekoware/bin/gcc` and `curl` is `/usr/nekoware/bin/curl`. Neither
+directory is on the step PATH, which is why the build steps extend it
+themselves. MIPSPro's `cc` and `c99` are under `/usr/bin` either way.
+
+That Nekoware `curl` was built with no default CA bundle: `curl-config --ca` is
+empty and every https URL ends at exit 60, `unable to get local issuer
+certificate`. SGUG-RSE ships a bundle at
+`/usr/sgug/etc/pki/tls/certs/ca-bundle.crt`, so the fetch step passes
+`--cacert`, which is correct on both kinds of machine.
+
+The `Environment` step prints `command -v gcc` and the version line, so the job
+log names the compiler that built the binary.
 
 ## Runner constraints
 
@@ -52,9 +80,10 @@ them in full.
 | Constraint | Write this instead |
 |---|---|
 | An `env:` block is not exported to the step's shell | Read it as `${{ env.NAME }}`, as this workflow does for `FIGLET_VERSION`. `$FIGLET_VERSION` is empty |
+| The step PATH is fixed at `/usr/sgug/bin:/usr/sgug/sbin:/usr/bin:/bin:/usr/sbin:/usr/bsd` | Nekoware and Freeware are not on it, so a step needing either appends to `PATH` itself. Nothing carries the export forward, so every such step repeats it |
 | No `hashFiles()`, and no `steps` context | Both fail the step by name. Without `$GITHUB_OUTPUT` there is nothing to put in `steps` |
 | No `GITHUB_TOKEN` in the step environment | Put REST API work in a separate job on a hosted runner |
-| Steps run under `-e`, bash steps under `-o pipefail` | Wrap a command you expect to fail in `if ...; then`, as the unpatched build is |
+| Steps run under `-e`, bash steps under `-o pipefail` | Wrap a command you expect to fail in `if ...; then`, as the unpatched build is. `cmd \| head -3` also fails the step, because the producer dies of SIGPIPE once `head` has its lines. Use `sed -n 1,3p` |
 | Workspace is not wiped between jobs | Run `git clean -xdff` after checkout when a clean tree matters |
 
 ## Expressions
@@ -67,6 +96,7 @@ them in full.
 - name: Fetch figlet ${{ env.FIGLET_VERSION }}
   run: |
     curl -fsSLo figlet.tar.gz \
+      --cacert /usr/sgug/etc/pki/tls/certs/ca-bundle.crt \
       https://codeload.github.com/cmatsuoka/figlet/tar.gz/refs/tags/${{ env.FIGLET_VERSION }}
 
 - name: Announce a tag build
