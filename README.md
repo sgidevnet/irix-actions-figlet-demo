@@ -1,82 +1,72 @@
-# figlet on IRIX
+# irix-actions-runner examples
 
-Builds figlet 2.2.5 from upstream source on an SGI workstation under GitHub
-Actions, as a worked example for
-[irix-actions-runner](https://github.com/sgidevnet/irix-actions-runner). figlet
-was chosen because it needs nothing beyond libc and builds in about twenty
-seconds on a 400MHz R12000.
+Example workflows for
+[irix-actions-runner](https://github.com/sgidevnet/irix-actions-runner):
 
-## Layout
+- `build.yml` builds figlet 2.2.5 on IRIX and uploads the binary and fonts.
+- `parallel-hinv.yml` runs a 10-job matrix on virtualized Indys and collects
+  their hardware inventories.
 
-    .github/workflows/build.yml   the workflow
-    patches/irix-cdefs.h          the shim described below
+Both workflows run on a real SGI or a Linux-hosted pool under `runner serve`.
 
-## The bug
+- [Successful figlet build](https://github.com/sgidevnet/irix-actions-figlet-demo/actions/runs/30654285492)
+- [10-Indy matrix job](https://github.com/sgidevnet/irix-actions-figlet-demo/actions/runs/30564803634)
 
-The Makefile sets `XCFLAGS` to `-DTLF_FONTS`, which pulls in `utf8.h`, which
-opens with `__BEGIN_DECLS`. That macro belongs to glibc's `<sys/cdefs.h>` and
-IRIX has no equivalent, so no declaration in the header parses. The first error
-reported is in another file, several hundred lines from the cause.
+## Run
 
-    utf8.h:30:1: error: unknown type name '__BEGIN_DECLS'
-    figlet.c:1149:5: warning: implicit declaration of function 'utf8_to_wchar'
+Requires irix-actions-runner 0.4.0 or later with the `irix` label. See the
+[runner setup](https://github.com/sgidevnet/irix-actions-runner#getting-started).
 
-Three ways it goes:
-
-    make CC=gcc LD=gcc              fails, as upstream ships
-    XCFLAGS=""                      builds, TLF font support off
-    -include patches/irix-cdefs.h   builds, TLF fonts intact
-
-Clearing `XCFLAGS` avoids the header rather than fixing it, and costs a
-feature. The shim defines the two macros and is forced ahead of every
-translation unit with `-include`, so no upstream file is edited.
-
-The workflow builds unpatched first and requires that build to fail, so the
-example stops being a demonstration the moment upstream or the toolchain
-changes.
-
-## Building it
-
-Requires irix-actions-runner 0.3.0 or newer, registered with the `irix` label;
-see
-[irix-actions-runner](https://github.com/sgidevnet/irix-actions-runner#configure-and-run)
-for setup.
-
-    gh workflow run build.yml
-
-## Runner constraints
-
-These shape how the workflow is written. The runner's own README documents
-them in full.
-
-| Constraint | Write this instead |
-|---|---|
-| An `env:` block is not exported to the step's shell | Read it as `${{ env.NAME }}`, as this workflow does for `FIGLET_VERSION`. `$FIGLET_VERSION` is empty |
-| No `hashFiles()`, and no `steps` context | Both fail the step by name. Without `$GITHUB_OUTPUT` there is nothing to put in `steps` |
-| No `GITHUB_TOKEN` in the step environment | Put REST API work in a separate job on a hosted runner |
-| Steps run under `-e`, bash steps under `-o pipefail` | Wrap a command you expect to fail in `if ...; then`, as the unpatched build is |
-| Workspace is not wiped between jobs | Run `git clean -xdff` after checkout when a clean tree matters |
-
-## Expressions
-
-`${{ }}` is evaluated in a `run:` body, a `with:` value, an `if:` and a step
-`name:`. Every context the job message carries is available, plus `env`,
-`secrets` and a synthesised `runner`.
-
-```yaml
-- name: Fetch figlet ${{ env.FIGLET_VERSION }}
-  run: |
-    curl -fsSLo figlet.tar.gz \
-      https://codeload.github.com/cmatsuoka/figlet/tar.gz/refs/tags/${{ env.FIGLET_VERSION }}
-
-- name: Announce a tag build
-  if: startsWith(github.ref, 'refs/tags/')
-  run: ./figlet -w 72 RELEASE
-
-- uses: actions/upload-artifact@v4
-  with:
-    name: figlet-irix-mips-n32-${{ github.run_number }}
+```sh
+gh workflow run build.yml
+gh workflow run parallel-hinv.yml
 ```
 
-That last one used to upload as `artifact`, because an expression in a `with:`
-value read as absent.
+## The figlet build failure
+
+figlet enables TLF fonts with `XCFLAGS=-DTLF_FONTS`. Its `utf8.h` and
+`zipio.h` use glibc's `__BEGIN_DECLS` and `__END_DECLS` macros, which IRIX does
+not provide.
+
+| Build | Result |
+|---|---|
+| Upstream defaults | Fails |
+| `XCFLAGS=""` | Builds without TLF font support |
+| Force-include `patches/irix-cdefs.h` | Builds with TLF font support |
+
+The shim defines the missing macros and includes `<alloca.h>`, where IRIX
+declares `alloca`. It is force-included through `CFLAGS`; upstream source is
+unchanged.
+
+The first diagnostic depends on the compiler:
+
+```text
+GCC 9.2:   utf8.h:30:1: error: unknown type name '__BEGIN_DECLS'
+GCC 3.4.6: utf8.h:32: error: syntax error before "size_t"
+```
+
+The workflow requires the unpatched build to fail. If upstream begins to build
+without the shim, the job fails.
+
+## Runner constraints used by these workflows
+
+| Constraint | Workflow behavior |
+|---|---|
+| `env:` values are not exported | Read `FIGLET_VERSION` and `FIGLET_FONT` through `${{ env.NAME }}` |
+| Step `PATH` is fixed | Append `/usr/nekoware/bin:/usr/freeware/bin` in every step that needs it |
+| Nekoware `curl` has no CA bundle | Pass `--cacert /usr/sgug/etc/pki/tls/certs/ca-bundle.crt` |
+| Bash uses `-e -o pipefail` | Use `sed` or `awk` instead of pipelines ending in `head` |
+| Hardware workspaces persist | Remove previous build and output directories before use |
+| IRIX artifact uploads retain the leading directory | The hosted collector reads `out/...` inside each artifact |
+
+The full SGUG-RSE install has GCC 9.2 at `/usr/sgug/bin/gcc`. The virtualized
+guest has GCC 3.4.6 and `curl` under `/usr/nekoware/bin`. Appending the extra
+paths keeps SGUG GCC first on real hardware.
+
+## Files
+
+| Path | Purpose |
+|---|---|
+| `.github/workflows/build.yml` | Fetch, fail unpatched, build with the shim, run and upload |
+| `.github/workflows/parallel-hinv.yml` | Fan out 10 IRIX jobs and collect their output |
+| `patches/irix-cdefs.h` | IRIX compatibility shim for figlet |

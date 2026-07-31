@@ -2,9 +2,9 @@ name: figlet on irix
 
 # Builds figlet 2.2.5 from upstream source on an SGI workstation.
 #
-# Needs irix-actions-runner 0.3.0 or newer for the ${{ }} below. An env: block
-# is readable as ${{ env.NAME }} but is not exported to the step's shell, so
-# $FIGLET_VERSION is empty.
+# Needs irix-actions-runner 0.4.0 or newer. An env: block is readable as
+# ${{ env.NAME }} but is not exported to the step's shell, so $FIGLET_VERSION
+# is empty.
 
 on:
   push:
@@ -24,35 +24,56 @@ jobs:
       - name: Environment
         run: |
           set -eu
+          # The runner builds every step's environment from scratch with a
+          # fixed PATH, and nothing carries an export from one step to the
+          # next, so each step that needs gcc or curl repeats these two lines.
+          # Appended, not prepended: a full SGUG-RSE install has GCC 9.2 at
+          # /usr/sgug/bin/gcc, which should win over Nekoware's 3.4.6.
+          PATH=$PATH:/usr/nekoware/bin:/usr/freeware/bin
+          export PATH
           uname -a
-          hinv -c processor | head -3
+          # sed, not head. Steps run under -o pipefail, so `hinv | head -3`
+          # kills hinv with SIGPIPE and fails the step.
+          hinv -c processor | sed -n 1,3p
+          echo "PATH=$PATH"
+          command -v gcc
           gcc --version | sed -n 1p
 
       - name: Fetch figlet ${{ env.FIGLET_VERSION }}
         run: |
           set -eu
+          PATH=$PATH:/usr/nekoware/bin:/usr/freeware/bin
+          export PATH
           rm -rf figlet-${{ env.FIGLET_VERSION }} figlet.tar.gz
+          # Nekoware's curl was built without a default CA bundle, so
+          # `curl-config --ca` is empty and every https URL ends at exit 60.
+          # SGUG-RSE ships one, at the same path on a real SGI.
           curl -fsSLo figlet.tar.gz \
+            --cacert /usr/sgug/etc/pki/tls/certs/ca-bundle.crt \
             https://codeload.github.com/cmatsuoka/figlet/tar.gz/refs/tags/${{ env.FIGLET_VERSION }}
           gzip -dc figlet.tar.gz | tar xf -
-          ls figlet-${{ env.FIGLET_VERSION }} | head
+          ls figlet-${{ env.FIGLET_VERSION }} | sed -n 1,10p
 
       # Expected to fail. XCFLAGS defaults to -DTLF_FONTS, which pulls in
       # utf8.h, which opens with __BEGIN_DECLS, a glibc macro IRIX lacks.
       - name: Build unpatched
         run: |
           set -eu
+          PATH=$PATH:/usr/nekoware/bin:/usr/freeware/bin
+          export PATH
           cd figlet-${{ env.FIGLET_VERSION }}
           if make CC=gcc LD=gcc > build.log 2>&1; then
             echo "unexpected: built without the shim"
             exit 1
           fi
-          grep "error:" build.log | head -3
+          awk '/error/ && n++ < 3' build.log
           make clean > /dev/null 2>&1
 
       - name: Build with the IRIX shim
         run: |
           set -eu
+          PATH=$PATH:/usr/nekoware/bin:/usr/freeware/bin
+          export PATH
           cd figlet-${{ env.FIGLET_VERSION }}
           # XCFLAGS is left at its default so TLF font support stays on.
           make CC=gcc LD=gcc \
